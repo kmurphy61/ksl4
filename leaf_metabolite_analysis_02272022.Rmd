@@ -1,0 +1,900 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+NOTE, RUN THE ROOT ANALYSIS FIRST, THEN ALL THE STANDARDS WILL BE LOADED INTO THE R ENVIRONMENT
+```{r}
+#load in required packages
+library(ggplot2)
+library(reshape2)
+library(scales)
+library(vegan)
+library(lubridate)
+library(tidyverse)
+library(dplyr)
+
+library(MASS)
+library(stringr)
+library(forcats)
+library(broom)
+library(writexl)
+library(readxl)
+```
+
+
+```{r}
+#check which directory you are in
+getwd()
+
+#load the peak height file
+height_pos <- read.csv(file = "LR_pos_08102020.csv", header = TRUE)
+height_pos <- height_pos %>% 
+  mutate_at(vars(mz,rt), funs(round(.,2)))
+height_pos$mz <- as.factor(height_pos$mz)
+height_pos$rt <- as.factor(height_pos$rt)
+height_pos$ID <- as.factor(height_pos$ID)
+height_pos$ID_2 <- paste("positive-", height_pos$ID, sep = "")
+height_pos$mz_rt <- paste(height_pos$mz, "@", height_pos$rt, sep = "" )
+height_pos$blank2 <- height_pos$blank8*0
+
+height_neg <- read.csv(file = "LR_neg_08102020.csv", header = TRUE)
+height_neg <- height_neg %>% 
+  mutate_at(vars(mz,rt), funs(round(.,2)))
+height_neg$ID <- as.factor(height_neg$ID)
+height_neg$mz <- as.factor(height_neg$mz)
+height_neg$rt <- as.factor(height_neg$rt)
+height_neg$ID_2 <- paste("negative-", height_neg$ID, sep = "")
+height_neg$mz_rt <- paste(height_neg$mz, "@", height_neg$rt, sep = "" )
+height_neg$blank8 <- height_neg$blank2*0
+
+leaf_merge_gnps <- read_excel("RL_merged_gnps_09102020.xlsx")
+
+want <- c("ID_2", "mz_rt")
+var_name_pos <- height_pos[want]
+var_name_pos <- var_name_pos %>% 
+  rename(variable = ID_2)
+var_name_neg <- height_neg[want]
+var_name_neg<- var_name_neg %>% 
+  rename( variable = ID_2)
+
+var_match <- rbind(var_name_pos, var_name_neg)
+
+var_match <- var_match %>%
+  left_join(leaf_merge_gnps, by = c("variable" = "scan1")) %>%
+  left_join(standards, by = "variable")
+
+height_pos <- height_pos[ , !grepl( "R" , names( height_pos ) ) ]
+height_neg <- height_neg[ , !grepl( "R" , names( height_neg ) ) ]
+```
+
+
+Get rid of features that are also high in the blank (needs to be 3x greater than blank to be a real peak)
+```{r}
+#get the columns in the proper order
+#this needs to be set to all columns with peak heights in them! Change the numbers in the line below
+orderup <- c(1,46, 47, 2:45, 48)
+height_pos <- height_pos[, orderup]
+height_neg <- height_neg[, orderup]
+
+#make a new column with the maximum peak height
+height_pos$max <- apply(height_pos[6:48],1,max)
+
+#label peaks as "good" or "bad" - if the max peak (i.e. highest out of all the samples) is not 3x greater than that peak in the blank, it is a "bad" peak and not included in future analysis
+height_pos_2 <- height_pos %>%
+  mutate (blank_calc = ifelse(max >= 3*blank8,"good","blank"))
+
+height_pos_2 <-  height_pos_2 %>%
+  filter(blank_calc == "good")
+
+blank_features_pos <- height_pos_2 %>%
+  filter(blank_calc == "blank")
+# export here if you want the blank features
+
+height_pos_2 <- subset( height_pos_2, select = -blank_calc )
+
+#get the columns in the proper order
+#this needs to be set to all columns with peak heights in them! Change the numbers in the line below
+height_neg$max <- apply(height_neg[6:48],1,max)
+
+#label peaks as "good" or "bad" - if the max peak (i.e. highest out of all the samples) is not 3x greater than that peak in the blank, it is a "bad" peak and not included in future analysis
+height_neg_2 <- height_neg %>%
+  mutate (blank_calc = ifelse(max >= 3*blank2,"good","blank"))
+
+height_neg_2 <-  height_neg_2 %>%
+  filter(blank_calc == "good")
+
+blank_features_neg <- height_neg_2 %>%
+  filter(blank_calc == "blank")
+#export here if you want the blank features
+
+height_neg_2 <- subset( height_neg_2, select = -blank_calc )
+
+#combine pos and neg
+height_merge <- rbind(height_pos_2, height_neg_2)
+
+```
+
+```{r}
+## Load the mapping file
+lc_map <- read.table("LCMS_map_leaf_summer.txt", header = T, row.names = 1)
+lc_map$Timepoint <- as.factor(lc_map$Timepoint)
+lc_map$Timepoint <- factor(lc_map$Timepoint, levels = c("NA","1", "2"))
+lc_map$Genotype <- factor(lc_map$Genotype, levels = c("NA","wt", "ksl4"))
+lc_map$Water <- factor(lc_map$Water, levels = c("NA","d", "nd"))
+lc_map_merge <- lc_map[match(colnames(height_merge), row.names(lc_map)),] 
+
+#make map of just samples, no standards
+map_sub <- subset(lc_map_merge, Genotype != "NA")
+height_sub <- height_merge[,match(row.names(map_sub), colnames(height_merge))]
+```
+
+
+```{r}
+#make a PCA plot of leaf metabolites
+pc <- capscale(t(log2(height_sub +1 )) ~ 1, distance = "bray")
+pc.axes <- cbind(map_sub, scores(pc, choices = c(1:3))$sites)
+head(pc.axes)
+
+evals  <- eigenvals(pc)
+evals_percent <- (evals / sum(evals)) *100
+evals_percent <- round(evals_percent,digits=2)
+
+head(pc.axes)
+summary(evals_percent)
+
+metab_plot <- ggplot(pc.axes, aes(MDS1, MDS2, color = Genotype, shape = Water, label = Timepoint )) + 
+  theme_bw() +
+  geom_text(aes(label= sample_ID_align.1),hjust=0, vjust=0) + 
+  geom_point(size = 2) +
+  xlab(paste("PCo1 (", evals_percent[1], " %)", sep = "")) +
+  ylab(paste("PCo2 (", evals_percent[2], " %)", sep = "")) +
+  scale_color_manual(values=c("#619CFF","#F8766D")) + 
+  theme(text = element_text(size = 11), legend.position = "bottom", legend.box = "horizontal") +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5), shape = guide_legend(title.position = "top", title.hjust = 0.5)) 
+metab_plot
+#ggsave(filename = "pcoa_metab.jpg", path = NULL,
+        # scale = 1, width = 3.35, height = 4, units = c("in"))
+```
+
+
+```{r}
+#permanova analysis to determine significant factors
+#leaf
+adonis(t(log2(height_sub+1))~ Water*Genotype*Timepoint,data = map_sub)
+
+#timepoint 1, V5
+map_sub_1 <- subset(map_sub, Timepoint == "1")
+height_sub_1 <- height_sub[,match(row.names(map_sub_1), colnames(height_sub))]
+
+adonis(t(log2(height_sub_1+1))~ Water*Genotype,data = map_sub_1)
+
+#timepoint 2, V12
+map_sub_2 <- subset(map_sub, Timepoint == "2")
+height_sub_2 <- height_sub[,match(row.names(map_sub_2), colnames(height_sub))]
+
+adonis(t(log2(height_sub_2+1))~ Water*Genotype,data = map_sub_2)
+
+#p value less than 0.05 is significant difference at 95% confidence
+```
+
+```{r}
+#Calculate which peaks are significantly enriched in different sample types, timepoint 1 (V5)
+#first, subset the data by different sample types and merge with the sample map
+rownames(height_merge) <- height_merge[,"ID_2"]
+map_sub_1_ND <- subset(map_sub, Timepoint == "1" & Water == "nd")
+height_sub_1_ND <- height_merge[,match(row.names(map_sub_1_ND), colnames(height_merge))]
+height_sub_1_ND <-  as.data.frame(t(height_sub_1_ND))
+height_sub_1_ND <- tibble::rownames_to_column(height_sub_1_ND, "SampleID")
+
+readymelt <- inner_join(map_sub_1_ND, height_sub_1_ND, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_1_ND_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_1_ND_tidy)
+
+map_sub_1_D <- subset(map_sub, Timepoint == "1" & Water == "d")
+height_sub_1_D <- height_merge[,match(row.names(map_sub_1_D), colnames(height_merge))]
+height_sub_1_D <-  as.data.frame(t(height_sub_1_D))
+height_sub_1_D <- tibble::rownames_to_column(height_sub_1_D, "SampleID")
+
+readymelt <- inner_join(map_sub_1_D, height_sub_1_D, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_1_D_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_1_D_tidy)
+
+#------
+map_sub_1_wt <- subset(map_sub, Timepoint == "1" & Genotype == "wt")
+height_sub_1_wt <- height_merge[,match(row.names(map_sub_1_wt), colnames(height_merge))]
+height_sub_1_wt <-  as.data.frame(t(height_sub_1_wt))
+height_sub_1_wt <- tibble::rownames_to_column(height_sub_1_wt, "SampleID")
+
+readymelt <- inner_join(map_sub_1_wt, height_sub_1_wt, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_1_wt_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_1_wt_tidy)
+
+#---------------
+
+map_sub_1_ksl4 <- subset(map_sub, Timepoint == "1" & Genotype == "ksl4")
+height_sub_1_ksl4 <- height_merge[,match(row.names(map_sub_1_ksl4), colnames(height_merge))]
+height_sub_1_ksl4 <-  as.data.frame(t(height_sub_1_ksl4))
+height_sub_1_ksl4 <- tibble::rownames_to_column(height_sub_1_ksl4, "SampleID")
+
+readymelt <- inner_join(map_sub_1_ksl4, height_sub_1_ksl4, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_1_ksl4_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_1_ksl4_tidy)
+
+#---------------
+
+#height_merge_2 <- height_merge[6:51]
+#height_merge_2 <-  as.data.frame(t(height_merge_2))
+
+#height_merge_2 <- tibble::rownames_to_column(height_merge_2, "SampleID")
+#intens5 <- intens5[match(row.names(intens5), row.names(map_sub)),] 
+
+#readymelt <- inner_join(map_sub, height_merge_2, by = c("sample_ID_align.1" = "SampleID" ))
+
+#intens3_tidy1 <- melt(readymelt, id.vars = names(map_sub))
+#str(intens3_tidy1)
+
+
+#-------------- WHICH PEAKS ARE SIG DIFF, NO NORMALIZATION
+
+
+library(tidyr)
+nest <- nest_legacy
+unnest <- unnest_legacy
+
+#not drought only, comparing the genotypes
+comp.lm_ND <- height_sub_1_ND_tidy %>% 
+  group_by(variable, Water) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_1_ND_tidy, by = c("variable", "Water")) %>% 
+  group_by(variable, Water) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_ND = map(data, ~lm(value ~ Genotype, .))) %>% 
+  mutate(type = "No offset") 
+
+
+
+comp.lm_results_ND <- comp.lm_ND %>%
+  unnest(map(nb_model_ND, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_ND)
+
+comp.lm_results_ND_export_1 <- comp.lm_results_ND %>% 
+  filter(p.adj <= 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")%>% 
+  mutate(significance = "1_ww_duetogeno")
+
+comp.lm_results_ND_notsig <- comp.lm_results_ND %>% 
+  filter(p.adj > 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")
+nrow(comp.lm_results_ND_notsig)
+
+#write_xlsx(comp.lm_results_ND_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp1_nd_genos.xlsx")
+
+
+
+#drought only 
+comp.lm_D <- height_sub_1_D_tidy %>% 
+  group_by(variable, Water) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_1_D_tidy, by = c("variable", "Water")) %>% 
+  group_by(variable, Water) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_D = map(data, ~lm(value ~ Genotype, .))) %>% 
+  mutate(type = "No offset") 
+
+comp.lm_results_D <- comp.lm_D %>%
+  unnest(map(nb_model_D, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_D)
+
+comp.lm_results_D_export_1 <- comp.lm_results_D %>% 
+  filter(p.adj <= 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")%>% 
+  mutate(significance = "1_ws_duetogeno")
+
+comp.lm_results_D_notsig <- comp.lm_results_D %>% 
+  filter(p.adj > 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")
+nrow(comp.lm_results_D_notsig)
+
+#write_xlsx(comp.lm_results_D_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp1_d_genos.xlsx")
+
+#by water 
+#WT only
+comp.lm_WT <- height_sub_1_wt_tidy %>% 
+  group_by(variable, Genotype) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_1_wt_tidy, by = c("variable", "Genotype")) %>% 
+  group_by(variable, Genotype) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_WT = map(data, ~lm(value ~ Water, .))) %>% 
+  mutate(type = "No offset") 
+
+comp.lm_results_WT <- comp.lm_WT %>%
+  unnest(map(nb_model_WT, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_WT)
+
+comp.lm_results_WT_export_1 <- comp.lm_results_WT %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj <= 0.1)%>% 
+  mutate(significance = "1_wt_duetowater")
+
+comp.lm_results_WT_notsig <- comp.lm_results_WT %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj > 0.1)
+nrow(comp.lm_results_WT_notsig)
+
+#write_xlsx(comp.lm_results_WT_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp1_wt_water.xlsx")
+
+
+#ksl4 only
+comp.lm_ksl4 <- height_sub_1_ksl4_tidy %>% 
+  group_by(variable, Genotype) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_1_ksl4_tidy, by = c("variable", "Genotype")) %>% 
+  group_by(variable, Genotype) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_ksl4 = map(data, ~lm(value ~ Water, .))) %>% 
+  mutate(type = "No offset") 
+
+comp.lm_results_ksl4 <- comp.lm_ksl4 %>%
+  unnest(map(nb_model_ksl4, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_ksl4)
+
+comp.lm_results_ksl4_export_1 <- comp.lm_results_ksl4 %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj <= 0.1)%>% 
+  mutate(significance = "1_ksl4_duetowater")
+
+comp.lm_results_ksl4_notsig <- comp.lm_results_ksl4 %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj > 0.1)
+nrow(comp.lm_results_ksl4_notsig)
+
+#write_xlsx(comp.lm_results_ksl4_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp1_ksl4_water.xlsx")
+
+#make lists of significantly enriched featuers for each sample type
+KS4_1_nd_leaf <-  comp.lm_results_ND_export_1 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate > 0)
+
+KS4_1_d_leaf <-  comp.lm_results_D_export_1 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate > 0)
+
+WT_1_nd_leaf <-  comp.lm_results_ND_export_1 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate < 0)
+
+WT_1_d_leaf <-  comp.lm_results_D_export_1 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate < 0)
+
+nd_1_WT_leaf <- comp.lm_results_WT_export_1  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate > 0)
+d_1_WT_leaf <- comp.lm_results_WT_export_1  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate < 0)
+nd_1_KS4_leaf <- comp.lm_results_ksl4_export_1  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate > 0)
+d_1_KS4_leaf <- comp.lm_results_ksl4_export_1  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate < 0)
+```
+
+
+
+```{r}
+#Calculate which peaks are significantly enriched in different sample types, timepoint 2 (V12)
+#first, subset the data by different sample types and merge with the sample map
+rownames(height_merge) <- height_merge[,"ID_2"]
+map_sub_2_ND <- subset(map_sub, Timepoint == "2" & Water == "nd")
+height_sub_2_ND <- height_merge[,match(row.names(map_sub_2_ND), colnames(height_merge))]
+height_sub_2_ND <-  as.data.frame(t(height_sub_2_ND))
+height_sub_2_ND <- tibble::rownames_to_column(height_sub_2_ND, "SampleID")
+
+readymelt <- inner_join(map_sub_2_ND, height_sub_2_ND, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_2_ND_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_2_ND_tidy)
+
+map_sub_2_D <- subset(map_sub, Timepoint == "2" & Water == "d")
+height_sub_2_D <- height_merge[,match(row.names(map_sub_2_D), colnames(height_merge))]
+height_sub_2_D <-  as.data.frame(t(height_sub_2_D))
+height_sub_2_D <- tibble::rownames_to_column(height_sub_2_D, "SampleID")
+
+readymelt <- inner_join(map_sub_2_D, height_sub_2_D, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_2_D_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_2_D_tidy)
+
+#------
+map_sub_2_wt <- subset(map_sub, Timepoint == "2" & Genotype == "wt")
+height_sub_2_wt <- height_merge[,match(row.names(map_sub_2_wt), colnames(height_merge))]
+height_sub_2_wt <-  as.data.frame(t(height_sub_2_wt))
+height_sub_2_wt <- tibble::rownames_to_column(height_sub_2_wt, "SampleID")
+
+readymelt <- inner_join(map_sub_2_wt, height_sub_2_wt, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_2_wt_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_2_wt_tidy)
+
+#---------------
+
+map_sub_2_ksl4 <- subset(map_sub, Timepoint == "2" & Genotype == "ksl4")
+height_sub_2_ksl4 <- height_merge[,match(row.names(map_sub_2_ksl4), colnames(height_merge))]
+height_sub_2_ksl4 <-  as.data.frame(t(height_sub_2_ksl4))
+height_sub_2_ksl4 <- tibble::rownames_to_column(height_sub_2_ksl4, "SampleID")
+
+readymelt <- inner_join(map_sub_2_ksl4, height_sub_2_ksl4, by = c("sample_ID_align.1" = "SampleID" ))
+
+height_sub_2_ksl4_tidy <- melt(readymelt, id.vars = names(map_sub))
+str(height_sub_2_ksl4_tidy)
+
+
+#-------------- WHICH PEAKS ARE SIG DIFF, NO NORMALIZATION
+
+
+library(tidyr)
+nest <- nest_legacy
+unnest <- unnest_legacy
+
+#not drought only, comparing the genotypes
+comp.lm_ND <- height_sub_2_ND_tidy %>% 
+  group_by(variable, Water) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_2_ND_tidy, by = c("variable", "Water")) %>% 
+  group_by(variable, Water) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_ND = map(data, ~lm(value ~ Genotype, .))) %>% 
+  mutate(type = "No offset") 
+
+head(comp.lm_ND)
+
+comp.lm_results_ND <- comp.lm_ND %>%
+  unnest(map(nb_model_ND, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_ND)
+
+comp.lm_results_ND_export_2 <- comp.lm_results_ND %>% 
+  filter(p.adj <= 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")%>% 
+  mutate(significance = "2_ww_duetogeno")
+
+comp.lm_results_ND_notsig <- comp.lm_results_ND %>% 
+  filter(p.adj > 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")
+nrow(comp.lm_results_ND_notsig)
+
+#write_xlsx(comp.lm_results_ND_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp2_nd_genos.xlsx")
+
+
+#drought only 
+comp.lm_D <- height_sub_2_D_tidy %>% 
+  group_by(variable, Water) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_2_D_tidy, by = c("variable", "Water")) %>% 
+  group_by(variable, Water) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_D = map(data, ~lm(value ~ Genotype, .))) %>% 
+  mutate(type = "No offset") 
+
+comp.lm_results_D <- comp.lm_D %>%
+  unnest(map(nb_model_D, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_D)
+
+comp.lm_results_D_export_2 <- comp.lm_results_D %>% 
+  filter(p.adj <= 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")%>% 
+  mutate(significance = "2_ws_duetogeno")
+
+comp.lm_results_D_notsig <- comp.lm_results_D %>% 
+  filter(p.adj > 0.1) %>%
+  arrange(estimate) %>% 
+  filter(term == "Genotypeksl4")
+nrow(comp.lm_results_D_notsig)
+
+#write_xlsx(comp.lm_results_D_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp2_d_genos.xlsx")
+
+#by water 
+#WT only
+comp.lm_WT <- height_sub_2_wt_tidy %>% 
+  group_by(variable, Genotype) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_2_wt_tidy, by = c("variable", "Genotype")) %>% 
+  group_by(variable, Genotype) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_WT = map(data, ~lm(value ~ Water, .))) %>% 
+  mutate(type = "No offset") 
+
+comp.lm_results_WT <- comp.lm_WT %>%
+  unnest(map(nb_model_WT, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_WT)
+
+comp.lm_results_WT_export_2 <- comp.lm_results_WT %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj <= 0.1)%>% 
+  mutate(significance = "2_wt_duetowater")
+
+comp.lm_results_WT_notsig <- comp.lm_results_WT %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj > 0.1)
+nrow(comp.lm_results_WT_notsig)
+
+#write_xlsx(comp.lm_results_WT_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp2_wt_water.xlsx")
+
+
+#ksl4 only
+comp.lm_ksl4 <- height_sub_2_ksl4_tidy %>% 
+  group_by(variable, Genotype) %>% 
+  summarise(prev = sum(value > 0) / n()) %>% 
+  filter(prev >= 0) %>% 
+  inner_join(height_sub_2_ksl4_tidy, by = c("variable", "Genotype")) %>% 
+  group_by(variable, Genotype) %>% 
+  na.omit() %>% 
+  nest() %>% 
+  mutate(nb_model_ksl4 = map(data, ~lm(value ~ Water, .))) %>% 
+  mutate(type = "No offset") 
+
+comp.lm_results_ksl4 <- comp.lm_ksl4 %>%
+  unnest(map(nb_model_ksl4, tidy)) %>% 
+  inner_join(var_match, by = "variable") %>% 
+  mutate(p.adj = p.adjust(p.value, "BH"))
+head(comp.lm_results_ksl4)
+
+comp.lm_results_ksl4_export_2 <- comp.lm_results_ksl4 %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj <= 0.1)%>% 
+  mutate(significance = "2_ksl4_duetowater")
+
+comp.lm_results_ksl4_notsig <- comp.lm_results_ksl4 %>% 
+  filter(term == "Waternd")%>%
+  arrange(estimate) %>% 
+  filter(p.adj > 0.1)
+nrow(comp.lm_results_ksl4_notsig)
+
+#write_xlsx(comp.lm_results_ksl4_export, "/Users/katiemurphy/Desktop/Sept2020-selected/results/root_tp2_ksl4_water.xlsx")
+
+#make lists of enriched features for each sample type
+KS4_2_nd_leaf <-  comp.lm_results_ND_export_2 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate > 0)
+
+KS4_2_d_leaf <-  comp.lm_results_D_export_2 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate > 0)
+
+WT_2_nd_leaf <-  comp.lm_results_ND_export_2 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate < 0)
+
+WT_2_d_leaf <-  comp.lm_results_D_export_2 %>% 
+  filter(p.value <= 0.05) %>% 
+  filter(estimate < 0)
+
+nd_2_WT_leaf <- comp.lm_results_WT_export_2  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate > 0)
+d_2_WT_leaf <- comp.lm_results_WT_export_2  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate < 0)
+nd_2_KS4_leaf <- comp.lm_results_ksl4_export_2  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate > 0)
+d_2_KS4_leaf <- comp.lm_results_ksl4_export_2  %>% 
+  filter(p.value <= 0.1) %>% 
+  filter(estimate < 0)
+```
+
+
+
+```{r}
+#make master lists of significant features
+
+
+allsig_geno_superlist_leaf <- comp.lm_results_ND_export_1 %>%
+  full_join(comp.lm_results_D_export_1, by = "variable") %>%
+  full_join(comp.lm_results_ND_export_2, by = "variable") %>%
+  full_join(comp.lm_results_D_export_2, by = "variable")
+
+allsig_water_superlist_leaf <- comp.lm_results_WT_export_1 %>%
+  full_join(comp.lm_results_ksl4_export_1, by = "variable") %>%
+  full_join(comp.lm_results_WT_export_2, by = "variable") %>%
+    full_join(comp.lm_results_ksl4_export_2, by = "variable")
+
+#make master list of features enriched in WT at timepoint 2, for both water statuses
+WT_incommon_2_leaf <- WT_2_d_leaf %>%
+ # inner_join(WT_1_d_root, by = "variable")  %>%
+ # inner_join(WT_2_d_root, by = "variable") %>%
+  inner_join(WT_2_nd_leaf, by = "variable") 
+
+head(WT_incommon_2_leaf)
+WT_incommon_2_leaf <- WT_incommon_2_leaf[!duplicated(WT_incommon_2_leaf$variable),]
+```
+
+
+Venn diagrams
+
+```{r}
+#make venn diagrams for the number of features enriched in each sample type
+library(RColorBrewer)
+library(VennDiagram)
+mCol3 <- brewer.pal(3, "Pastel2")
+mCol2 <- brewer.pal(2, "Pastel2")
+mCol4 <- brewer.pal(4, "Pastel2")
+
+getwd()
+
+venn.diagram(
+  x = list(WT_1_d_leaf$variable, WT_1_nd_leaf$variable, WT_2_d_leaf$variable, WT_2_nd_leaf$variable),
+  category.names = c("WT_1_d_leaf" , "WT_1_nd_leaf", "WT_2_d_leaf", "WT_2_nd_leaf"),
+  filename = '/Users/katiemurphy/Desktop/Sept2020-selected/results/WT_leaf.png',
+  output=TRUE, 
+fill = mCol4)
+
+venn.diagram(
+  x = list(KS4_1_d_leaf$variable, KS4_1_nd_leaf$variable, KS4_2_d_leaf$variable, KS4_2_nd_leaf$variable),
+  category.names = c("KS4_1_d_leaf" , "KS4_1_nd_leaf", "KS4_2_d_leaf", "KS4_2_nd_leaf"),
+  filename = '/Users/katiemurphy/Desktop/Sept2020-selected/results/KS4_leaf.png',
+  output=TRUE, 
+fill = mCol4)
+
+venn.diagram(
+  x = list(KS4_1_d_leaf$variable, KS4_1_nd_leaf$variable, WT_1_d_leaf$variable, WT_1_nd_leaf$variable),
+  category.names = c("KS4_1_d_leaf" , "KS4_1_nd_leaf", "WT_1_d_leaf", "WT_1_nd_leaf"),
+  filename = '/Users/katiemurphy/Desktop/Sept2020-selected/results/tp1_leaf.png',
+  output=TRUE, 
+fill = mCol4)
+
+venn.diagram(
+  x = list(KS4_2_d_leaf$variable, KS4_2_nd_leaf$variable, WT_2_d_leaf$variable, WT_2_nd_leaf$variable),
+  category.names = c("KS4_2_d_leaf" , "KS4_2_nd_leaf", "WT_2_d_leaf", "WT_2_nd_leaf"),
+  filename = '/Users/katiemurphy/Desktop/Sept2020-selected/results/tp2_leaf.png',
+  output=TRUE, 
+fill = mCol4)
+
+
+venn.diagram(
+  x = list(d_1_KS4_leaf$variable, d_2_KS4_leaf$variable, d_1_WT_leaf$variable, d_2_WT_leaf$variable),
+  category.names = c("d_1_KS4_leaf" , "d_2_KS4_leaf", "d_1_WT_leaf", "d_2_WT_leaf"),
+  filename = '/Users/katiemurphy/Desktop/Sept2020-selected/results/drought_on_genos_leaf.png',
+  output=TRUE, 
+fill = mCol4)
+
+venn.diagram(
+  x = list(nd_1_KS4_leaf$variable, nd_2_KS4_leaf$variable, nd_1_WT_leaf$variable, nd_2_WT_leaf$variable),
+  category.names = c("nd_1_KS4_leaf" , "nd_2_KS4_leaf", "nd_1_WT_leaf", "nd_2_WT_leaf"),
+  filename = '/Users/katiemurphy/Desktop/Sept2020-selected/results/nd_on_genos_leaf.png',
+  output=TRUE, 
+fill = mCol4)
+
+#make lists of what's in those special intersections
+
+WT_incommon <- WT_1_nd_leaf %>%
+  inner_join(WT_1_d_leaf, by = "variable")  %>%
+  inner_join(WT_2_d_leaf, by = "variable") %>%
+  inner_join(WT_2_nd_leaf, by = "variable") 
+
+write_xlsx(WT_incommon, "/Users/katiemurphy/Desktop/Sept2020-selected/results/WT_incommon_leaf.xlsx")
+
+```
+
+
+```{r}
+average_by_sampletype_L <- height_merge %>%
+  gather(SampleID, value, -ID_2) %>%
+  mutate(ID_2 = as.character(ID_2))%>%
+  mutate(value = as.numeric(value)) %>%
+  inner_join(map_sub, by = c("SampleID" = "sample_ID_align.1")) %>%
+  group_by(ID_2, Timepoint, Genotype, Water)%>%
+  summarize(avg = mean(value, na.rm = TRUE))
+
+average_by_sampletype_L$samptype <- paste(average_by_sampletype_L$Genotype, average_by_sampletype_L$Water, average_by_sampletype_L$Timepoint, sep = "")
+
+head(average_by_sampletype_L)
+
+average_by_sampletype_L <- average_by_sampletype_L[,-c(2:4)]
+#-----------
+
+average_by_sampletype_L_WT2 <- WT_incommon_2_leaf %>% 
+  inner_join(average_by_sampletype_L, by = c("variable" = "ID_2")) 
+
+head(average_by_sampletype_L_WT2)
+
+average_by_sampletype_L_WT3 <- average_by_sampletype_L_WT2 %>% 
+  spread(samptype, avg) %>% 
+  mutate(log2_2d = log((ksl4d2/wtd2),2)) %>%
+  mutate(log2_2nd = log((ksl4nd2/wtnd2),2))
+head(average_by_sampletype_L_WT3)
+  
+write_xlsx(average_by_sampletype_L_WT3, "/Users/katiemurphy/Desktop/KS4_paper_2021/LCMS/results_02272022/WT_INCOMMON_FULL_2_leaf.xlsx")
+
+```
+
+
+```{r}
+#make average peak intensity by sample type so that you can export the sample type average along with the peak information, for a super list of all enriched features DUE TO GENOTYPE
+
+nrow(allsig_geno_superlist_leaf)
+#katie here combine so you have one master significance list! 
+allsig_geno_superlist_leaf <- allsig_geno_superlist_leaf [!duplicated(allsig_geno_superlist_leaf$variable),]
+
+average_by_sampletype_L_genos<-  allsig_geno_superlist_leaf %>% 
+  inner_join(average_by_sampletype_L, by = c("variable" = "ID_2")) 
+
+average_by_sampletype_L_genos2 <- average_by_sampletype_L_genos %>% 
+  spread(samptype, avg) %>% 
+  mutate(log2_2d = log((ksl4d2/wtd2),2)) %>% 
+  mutate(log2_1nd = log((ksl4nd1/wtnd1),2)) %>%
+  mutate(log2_1d = log((ksl4d1/wtd1),2)) %>%
+  mutate(log2_2nd = log((ksl4nd2/wtnd2),2))
+head(average_by_sampletype_L_genos2)
+  
+#write_xlsx(sig_avg_by_sampletype_R_neg, "/Users/katiemurphy/Desktop/Sept2020-selected/results/relat_avg_R_neg_sig_all.xlsx")
+#write_xlsx(sig_avg_by_sampletype_R_pos, "/Users/katiemurphy/Desktop/Sept2020-selected/results/relat_avg_R_pos_sig_all.xlsx")
+
+write_xlsx(average_by_sampletype_L_genos2, "/Users/katiemurphy/Desktop/KS4_paper_2021/LCMS/results_02272022/L_sig_all_bygenos.xlsx")
+
+```
+
+```{r}
+
+#make average peak intensity by sample type so that you can export the sample type average along with the peak information, for a super list of all enriched features DUE TO WATER STATUS
+allsig_water_superlist_leaf <- allsig_water_superlist_leaf [!duplicated(allsig_water_superlist_leaf$variable),]
+
+average_by_sampletype_L_water<-  allsig_water_superlist_leaf %>% 
+  inner_join(average_by_sampletype_L, by = c("variable" = "ID_2")) 
+
+average_by_sampletype_L_water2 <- average_by_sampletype_L_water %>% 
+  spread(samptype, avg) %>% 
+  mutate(log2_2ks4 = log((ksl4d2/ksl4nd2),2)) %>% 
+  mutate(log2_2wt = log((wtd2/wtnd2),2)) %>%
+  mutate(log2_1ks4 = log((ksl4d1/ksl4nd1),2)) %>%
+  mutate(log2_1wt = log((wtd1/wtnd1),2))
+head(average_by_sampletype_L_water2)
+  
+#sig_avg_by_sampletype_R_pos <- sig_avg_by_sampletype_R[str_detect(sig_avg_by_sampletype_R$variable, "pos"), ]
+#sig_avg_by_sampletype_R_neg <- sig_avg_by_sampletype_R[str_detect(sig_avg_by_sampletype_R$variable, "neg"), ]
+
+#write_xlsx(sig_avg_by_sampletype_R_neg, "/Users/katiemurphy/Desktop/Sept2020-selected/results/relat_avg_R_neg_sig_all.xlsx")
+#write_xlsx(sig_avg_by_sampletype_R_pos, "/Users/katiemurphy/Desktop/Sept2020-selected/results/relat_avg_R_pos_sig_all.xlsx")
+
+write_xlsx(average_by_sampletype_L_water2, "/Users/katiemurphy/Desktop/KS4_paper_2021/LCMS/results_02272022/L_sig_all_bywater.xlsx")
+
+```
+
+
+```{r}
+#make feature intensity boxplots of significant metabolites
+
+new_intens <- height_merge %>%
+  gather(SampleID, value, -ID_2) %>%
+  mutate(ID_2 = as.character(ID_2))%>%
+  mutate(value = as.numeric(value)) %>%
+  inner_join(map_sub, by = c("SampleID" = "sample_ID_align.1")) %>%
+  group_by(SampleID)
+
+head(new_intens)
+
+WT_up_incommon_plot_L <- boxplot_names %>% 
+  inner_join(new_intens, by = c("variable" = "ID_2")) %>% 
+  group_by(variable) #%>%
+
+
+plot_b <- ggplot(subset(WT_up_incommon_plot_L), aes(x = Genotype, y = value, fill = interaction(Water,Timepoint))) +
+  geom_boxplot() +
+  facet_wrap( ~ variable, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(y = "value") +
+  theme(text = element_text(size = 10), axis.ticks.x = element_blank(), legend.key = element_blank()) + 
+  #scale_fill_manual(values=c( "#619CFF", "#F8766D")) + 
+  theme(legend.title=element_blank(), axis.title.x=element_blank()) +
+  theme(legend.justification=c(1,0), legend.position = "bottom") + 
+  scale_y_continuous(labels = function(x) format(x, scientific = TRUE))
+plot_b
+```
+
+```{r}
+#make plots of the standards in the different sample types
+
+
+leaf_standards_plot <- standards %>% 
+  inner_join(new_intens, by = c("variable" = "ID_2")) %>% 
+  group_by(variable) #%>%
+
+
+
+leaf_standards_plot <- ggplot(subset(leaf_standards_plot), aes(x = Genotype, y = value, fill = interaction(Water,Timepoint))) +
+  geom_boxplot() +
+  facet_wrap( ~ variable, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(y = "value") +
+  theme(text = element_text(size = 10), axis.ticks.x = element_blank(), legend.key = element_blank()) + 
+  #scale_fill_manual(values=c( "#619CFF", "#F8766D")) + 
+  theme(legend.title=element_blank(), axis.title.x=element_blank()) +
+  theme(legend.justification=c(1,0), legend.position = "bottom") + 
+  scale_y_continuous(labels = function(x) format(x, scientific = TRUE))
+leaf_standards_plot
+```
+
+
+Quantification
+```{r}
+#quantify the standards using the known concentrations so you can convert peak intensity to concentration, made using a standard curve
+
+quant_file_304 <- new_intens %>%
+  filter(ID_2 == "positive-11414")
+
+quant_file_203 <- new_intens %>%
+  filter(ID_2 == "positive-9910")
+
+quant_file_203$quant <- ((quant_file_203$value - 638114)/23163846)*10
+quant_file_304$quant <- ((quant_file_304$value - 1236933)/67834117)*10
+
+quant_file <- rbind(quant_file_203, quant_file_304)
+  
+quant_plot <- ggplot(subset(quant_file), aes(x = Genotype, y = quant, fill = interaction(Water,Timepoint))) +
+  geom_boxplot() +
+  facet_wrap( ~ ID_2, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(y = "ug/g FW leaf tissue") +
+  theme(text = element_text(size = 10), axis.ticks.x = element_blank(), legend.key = element_blank()) + 
+  #scale_fill_manual(values=c( "#619CFF", "#F8766D")) + 
+  theme(legend.title=element_blank(), axis.title.x=element_blank()) +
+  theme(legend.justification=c(1,0), legend.position = "bottom") + 
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE))
+quant_plot
+
+```
