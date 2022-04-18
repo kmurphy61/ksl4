@@ -1,0 +1,223 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+First, load in the required packages. 
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(scales)
+library(vegan)
+library(lubridate)
+library(tidyverse)
+library(dplyr)
+
+library(MASS)
+library(stringr)
+library(forcats)
+library(broom)
+library(writexl)
+library(readxl)
+library(lsmeans)
+```
+
+
+Next, read in the data files for single value traits and multi value traits and then make them look the way you want to get rid of empty columns
+```{r}
+#import text file
+harvest1 <- read_xlsx("weights_Danforth_ks4_03242022.xlsx")
+davis_harvest1 <- read_xlsx("weights_Davis_ks4_03242022.xlsx")
+
+head(harvest1)
+summary(harvest1)
+
+
+
+#harvest1$Genotype <- factor(harvest1$Genotype, levels = c("Zmksl4","WT"))
+#davis_harvest1$Genotype <- factor(davis_harvest1$Genotype, levels = c("Zmksl4","WT"))
+davis_harvest1$Timepoint <- factor(davis_harvest1$Timepoint, levels = c("V5","V12"))
+
+davis_harvest1_V5 <- davis_harvest1 %>%
+  filter(Timepoint =="V5")
+
+davis_harvest1_V12 <- davis_harvest1 %>%
+  filter(Timepoint =="V12")
+```
+
+
+```{r}
+#SHOOT WEIGHT danforth
+full_model = lm(shoot_weight_kg ~ Genotype*Water_status, harvest1)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype)$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status)$contrasts
+summary(vscontrol,infer = T, side = '<')
+```
+
+
+```{r}
+#ROOT WEIGHT
+full_model = lm(root_weight_kg ~ Genotype*Water_status, harvest1)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype)$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status)$contrasts
+summary(vscontrol,infer = T, side = '<')
+```
+
+
+
+```{r}
+#ROOT/SHOOT WEIGHT RATIO
+full_model = lm(root_shoot_weight_ratio ~ Genotype*Water_status, harvest1)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype)$contrasts
+summary(vscontrol,infer = T, side = '<')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status)$contrasts
+summary(vscontrol,infer = T, side = '<')
+```
+
+```{r}
+#prepare things for plotting
+harvest2 <- harvest1 %>%
+  unite("identity", Genotype:Water_status, remove = FALSE) %>%
+  gather(.,"measurement", "value",5:8) %>%
+  filter(measurement == "root_shoot_weight_ratio")
+
+head(harvest2)
+
+harvest3 <- harvest1 %>%
+  unite("identity", Genotype:Water_status, remove = FALSE) %>%
+  gather(.,"measurement", "value",5:8) %>%
+  filter(measurement != "number_of_leaves")  %>%
+  filter(measurement != "root_shoot_weight_ratio") 
+  
+
+head(harvest2)
+```
+
+
+
+
+```{r}
+plot_dan <- ggplot(harvest2, aes(x = measurement, y = value, fill = identity)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  #facet_wrap( ~ variable, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(y = "value") +
+  theme(text = element_text(size = 10), axis.ticks.x = element_blank(), legend.key = element_blank()) + 
+  #scale_fill_manual(values=c( "#619CFF", "#F8766D")) + 
+  theme(legend.title=element_blank(), axis.title.x=element_blank()) +
+  theme(legend.justification=c(1,0), legend.position = "bottom") #+ 
+  #scale_y_continuous(labels = function(x) format(x, scientific = TRUE))
+plot_dan
+```
+
+
+
+```{r}
+plot_dan <- ggplot(harvest3, aes(x = measurement, y = value, fill = identity)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  #facet_wrap( ~ variable, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(y = "value") +
+  theme(text = element_text(size = 10), axis.ticks.x = element_blank(), legend.key = element_blank()) + 
+  #scale_fill_manual(values=c( "#619CFF", "#F8766D")) + 
+  theme(legend.title=element_blank(), axis.title.x=element_blank()) +
+  theme(legend.justification=c(1,0), legend.position = "bottom") #+ 
+  #scale_y_continuous(labels = function(x) format(x, scientific = TRUE))
+plot_dan
+```
+
+
+
+```{r}
+#SHOOT WEIGHT davis V5
+full_model = lm(shoot_weight_kg ~ Genotype*Water_status, davis_harvest1_V5)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype )$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status )$contrasts
+summary(vscontrol,infer = T, side = '<')
+
+#SHOOT WEIGHT davis V12
+full_model = lm(shoot_weight_kg ~ Genotype*Water_status , davis_harvest1_V12)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype )$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status )$contrasts
+summary(vscontrol,infer = T, side = '<')
+```
+
+
+
+```{r}
+#ROOT WEIGHT davis V5
+full_model = lm(root_weight_kg ~ Genotype*Water_status , davis_harvest1_V5)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype )$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status )$contrasts
+summary(vscontrol,infer = T, side = '<')
+
+#ROOT WEIGHT davis V12
+full_model = lm(root_weight_kg ~ Genotype*Water_status , davis_harvest1_V12)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype )$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status )$contrasts
+summary(vscontrol,infer = T, side = '<')
+```
+
+
+
+```{r}
+#root/shoot ratio davis
+
+#V5
+full_model = lm(root_shoot_weight_ratio ~ Genotype*Water_status , davis_harvest1_V5)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype)$contrasts
+summary(vscontrol,infer = T, side = '>')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status)$contrasts
+summary(vscontrol,infer = T, side = '<')
+
+
+#V12
+full_model = lm(root_shoot_weight_ratio ~ Genotype*Water_status , davis_harvest1_V12)
+summary(full_model)
+anova(full_model)
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Water_status|Genotype)$contrasts
+summary(vscontrol,infer = T, side = '<')
+
+vscontrol = lsmeans(full_model, trt.vs.ctrl ~ Genotype|Water_status)$contrasts
+summary(vscontrol,infer = T, side = '<')
+```
