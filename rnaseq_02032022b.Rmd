@@ -1,0 +1,1069 @@
+---
+title: "Katie's RNAseq Analysis"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+Load packages
+```{r}
+#load in required packages
+library(ggplot2)
+library(reshape2)
+library(scales)
+library(vegan)
+library(lubridate)
+library(tidyverse)
+
+library(MASS)
+library(stringr)
+library(forcats)
+library(broom)
+library(DESeq2)
+library(pheatmap)
+library(data.table)
+library(apeglm)
+library(ashr)
+library("RColorBrewer")
+library(EnhancedVolcano)
+library(VennDiagram)
+
+```
+
+Load in Data
+
+```{r}
+getwd()
+samplemap <- read.csv(file = 'RNAseq_metadata_wout71.csv', header = TRUE)
+cts <- read.table(file = "Katie_bwamap_alllibs_minqual40_wout71.txt", header = TRUE, row.names = 1)
+head(cts)
+
+samplemap_Leaf_A <- samplemap %>% 
+  filter(Tissue == "Leaf") %>% 
+  filter(Timepoint == "A")
+
+samplemap_Leaf_B <- samplemap %>% 
+  filter(Tissue == "Leaf") %>% 
+  filter(Timepoint == "B")
+
+samplemap_root_A <- samplemap %>% 
+  filter(Tissue == "Root") %>% 
+  filter(Timepoint == "A")
+
+samplemap_root_B <- samplemap %>% 
+  filter(Tissue == "Root") %>% 
+  filter(Timepoint == "B")
+
+cts <- subset( cts, select = -Strt)
+cts <- subset( cts, select = -End)
+cts_leaf <- cts[ , !grepl( "Yellow" , names( cts ) ) ]
+cts_root <- cts[ , grepl( "Yellow" , names( cts ) ) ]
+
+cts_root_A <- cts_root[ , names(cts_root) %in% samplemap_root_A$SampleID ]
+cts_root_B <- cts_root[ , names(cts_root) %in% samplemap_root_B$SampleID ]
+
+cts_leaf_A <- cts_leaf[ , names(cts_leaf) %in% samplemap_Leaf_A$SampleID ]
+cts_leaf_B <- cts_leaf[ , names(cts_leaf) %in% samplemap_Leaf_B$SampleID ]
+
+key <- read.csv(file = 'key copy.csv', header = TRUE)
+v3_match <- read.csv(file = "genes_all copy.csv", header = TRUE)
+
+```
+
+Run DESeq2
+
+```{r}
+dds_leaf_A <- DESeqDataSetFromMatrix(countData = cts_leaf_A,
+                              colData = samplemap_Leaf_A,
+                              design =  ~Water + Genotype + Water:Genotype)
+dds_leaf_A$Water = relevel(dds_leaf_A$Water, "ND")
+dds_leaf_A$Genotype = relevel(dds_leaf_A$Genotype, "WT")
+dds_leaf_A <- DESeq(dds_leaf_A)
+
+#normalize the data
+vsd_leaf_A <- vst(dds_leaf_A, blind=FALSE)
+nrow(dds_leaf_A)
+
+#list the coefficients
+resultsNames(dds_leaf_A)
+
+
+dds_leaf_B <- DESeqDataSetFromMatrix(countData = cts_leaf_B,
+                              colData = samplemap_Leaf_B,
+                              design =  ~Water + Genotype + Water:Genotype)
+dds_leaf_B$Water = relevel(dds_leaf_B$Water, "ND")
+dds_leaf_B$Genotype = relevel(dds_leaf_B$Genotype, "WT")
+dds_leaf_B <- DESeq(dds_leaf_B)
+
+#normalize the data
+vsd_leaf_B <- vst(dds_leaf_B, blind=FALSE)
+
+#list the coefficients
+resultsNames(dds_leaf_B)
+
+dds_root_A <- DESeqDataSetFromMatrix(countData = cts_root_A,
+                              colData = samplemap_root_A,
+                              design =  ~Water + Genotype + Water:Genotype)
+dds_root_A$Water = relevel(dds_root_A$Water, "ND")
+dds_root_A$Genotype = relevel(dds_root_A$Genotype, "WT")
+dds_root_A <- DESeq(dds_root_A)
+
+#normalize the data
+vsd_root_A <- vst(dds_root_A, blind=FALSE)
+
+#list the coefficients
+resultsNames(dds_root_A)
+
+dds_root_B <- DESeqDataSetFromMatrix(countData = cts_root_B,
+                              colData = samplemap_root_B,
+                              design =  ~Water + Genotype + Water:Genotype)
+dds_root_B$Water = relevel(dds_root_B$Water, "ND")
+dds_root_B$Genotype = relevel(dds_root_B$Genotype, "WT")
+dds_root_B <- DESeq(dds_root_B)
+
+#normalize the data
+vsd_root_B <- vst(dds_root_B, blind=FALSE)
+
+#list the coefficients
+resultsNames(dds_root_B)
+
+
+```
+
+Results - Leaf A
+```{r}
+#Effect of treatment on WT
+res_L_A_WonWT <- results(dds_leaf_A, contrast=c("Water","D","ND"))
+res_L_A_WonWT_sig <- subset(res_L_A_WonWT, padj <= 0.1)
+summary(res_L_A_WonWT)
+
+res_L_A_WonWT_shrunk <- dds_leaf_A %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr")
+summary(res_L_A_WonWT_shrunk)
+
+res_L_A_WonWT_shrunk_sig <- dds_leaf_A %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_A_WonWT_shrunk_sig, keep.rownames = TRUE)[]
+res_L_A_WonWT_shrunk_sig <- res_L_A_WonWT_shrunk_sig[order(log2FoldChange),]
+
+
+#Effect of treatment on KS4
+res_L_A_WonKS <- results(dds_leaf_A, list( c("Water_D_vs_ND","WaterD.GenotypeKS4") ))
+res_L_A_WonKS_sig <- subset(res_L_A_WonKS, padj <= 0.1)
+summary(res_L_A_WonKS)
+
+res_L_A_WonKS_shrunk <- dds_leaf_A %>%
+  lfcShrink(., contrast = list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_L_A_WonKS_shrunk)
+
+res_L_A_WonKS_shrunk_sig <- dds_leaf_A %>%
+  lfcShrink(., contrast = list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_A_WonKS_shrunk_sig, keep.rownames = TRUE)[]
+res_L_A_WonKS_shrunk_sig <- res_L_A_WonKS_shrunk_sig[order(log2FoldChange),]
+
+#What is the difference between mutant and wild-type without treatment?
+res_L_A_MonND = results(dds_leaf_A, contrast=c("Genotype","KS4","WT"))
+res_L_A_MonND_sig <- subset(res_L_A_MonND, padj <= 0.1)
+summary(res_L_A_MonND)
+
+res_L_A_MonND_shrunk <- dds_leaf_A %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr")
+summary(res_L_A_MonND_shrunk)
+
+res_L_A_MonND_shrunk_sig <- dds_leaf_A %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_A_MonND_shrunk_sig, keep.rownames = TRUE)[]
+res_L_A_MonND_shrunk_sig <- res_L_A_MonND_shrunk_sig[order(log2FoldChange),]
+
+#What is the difference between mutant and wild-type WITH treatment?
+res_L_A_MonD = results(dds_leaf_A, list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4") ))
+res_L_A_MonD <- res_L_A_MonD[order(res_L_A_MonD$padj),] # sort
+summary(res_L_A_MonD)
+res_L_A_MonD_sig <- subset(res_L_A_MonD, padj <= 0.1)
+nrow(res_L_A_MonD_sig)
+
+res_L_A_MonD_shrunk <- dds_leaf_A %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_L_A_MonD_shrunk)
+
+res_L_A_MonD_shrunk_sig <- dds_leaf_A %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj < 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_A_MonD_shrunk_sig, keep.rownames = TRUE)[]
+res_L_A_MonD_shrunk_sig <- res_L_A_MonD_shrunk_sig[order(log2FoldChange),]
+
+#interaction - is effect of treatment different across genotypes?
+res_L_A_int = results(dds_leaf_A, name="WaterD.GenotypeKS4")
+summary(res_L_A_int)
+res_L_A_int_sig <- subset(res_L_A_int, padj <= 0.1)
+
+res_L_A_int_shrunk <- dds_leaf_A %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr")
+summary(res_L_A_int_shrunk)
+
+res_L_A_int_shrunk_sig <- dds_leaf_A %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_A_int_shrunk_sig, keep.rownames = TRUE)[]
+res_L_A_int_shrunk_sig <- res_L_A_int_shrunk_sig[order(log2FoldChange),]
+```
+
+Results - Leaf B
+```{r}
+#Effect of treatment on WT
+res_L_B_WonWT <- results(dds_leaf_B, contrast=c("Water","D","ND"))
+res_L_B_WonWT_sig <- subset(res_L_B_WonWT, padj <= 0.1)
+
+res_L_B_WonWT_shrunk <- dds_leaf_B %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr")
+summary(res_L_B_WonWT_shrunk)
+
+res_L_B_WonWT_shrunk_sig <- dds_leaf_B %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_B_WonWT_shrunk_sig, keep.rownames = TRUE)[]
+res_L_B_WonWT_shrunk_sig <- res_L_B_WonWT_shrunk_sig[order(log2FoldChange),]
+
+
+#Effect of treatment on KS4
+res_L_B_WonKS <- results(dds_leaf_B, list( c("Water_D_vs_ND","WaterD.GenotypeKS4") ))
+res_L_B_WonKS_sig <- subset(res_L_B_WonKS, padj <= 0.1)
+summary(res_L_B_WonKS)
+
+res_L_B_WonKS_shrunk <- dds_leaf_B %>%
+  lfcShrink(., contrast= list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_L_B_WonKS_shrunk)
+
+res_L_B_WonKS_shrunk_sig <- dds_leaf_B %>%
+  lfcShrink(., contrast= list(c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_B_WonKS_shrunk_sig, keep.rownames = TRUE)[]
+res_L_B_WonKS_shrunk_sig <- res_L_B_WonKS_shrunk_sig[order(log2FoldChange),]
+summary(res_L_B_WonKS_sig)
+
+#What is the difference between mutant and wild-type without treatment?
+res_L_B_MonND = results(dds_leaf_B, contrast=c("Genotype","KS4","WT"))
+res_L_B_MonND_sig <- subset(res_L_B_MonND, padj <= 0.1)
+summary(res_L_B_MonND)
+
+res_L_B_MonND_shrunk <- dds_leaf_B %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr")
+summary(res_L_B_MonND_shrunk)
+
+res_L_B_MonND_shrunk_sig <- dds_leaf_B %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_B_MonND_shrunk_sig, keep.rownames = TRUE)[]
+res_L_B_MonND_shrunk_sig <- res_L_B_MonND_shrunk_sig[order(log2FoldChange),]
+
+#What is the difference between mutant and wild-type WITH treatment?
+res_L_B_MonD = results(dds_leaf_B, list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4") ))
+res_L_B_MonD <- res_L_B_MonD[order(res_L_B_MonD$padj),] # sort
+head(res_L_B_MonD)
+summary(res_L_B_MonD)
+res_L_B_MonD_sig <- subset(res_L_B_MonD, padj <= 0.1)
+
+res_L_B_MonD_shrunk <- dds_leaf_B %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_L_B_MonD_shrunk)
+
+res_L_B_MonD_shrunk_sig <- dds_leaf_B %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj < 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_B_MonD_shrunk_sig, keep.rownames = TRUE)[]
+res_L_B_MonD_shrunk_sig <- res_L_B_MonD_shrunk_sig[order(log2FoldChange),]
+
+#interaction - is effect of treatment different across genotypes?
+res_L_B_int = results(dds_leaf_B, name="WaterD.GenotypeKS4")
+summary(res_L_B_int)
+res_L_B_int_sig <- subset(res_L_B_int, padj <= 0.1)
+
+res_L_B_int_shrunk <- dds_leaf_B %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr")
+summary(res_L_B_int_shrunk)
+
+res_L_B_int_shrunk_sig <- dds_leaf_B %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_L_B_int_shrunk_sig, keep.rownames = TRUE)[]
+res_L_B_int_shrunk_sig <- res_L_B_int_shrunk_sig[order(log2FoldChange),]
+```
+
+Results - ROOT A
+```{r}
+#Effect of treatment on WT
+res_R_A_WonWT <- results(dds_root_A, contrast=c("Water","D","ND"))
+res_R_A_WonWT_sig <- subset(res_R_A_WonWT, padj < 0.1)
+summary(res_R_A_WonWT)
+
+res_R_A_WonWT_shrunk <- dds_root_A %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr")
+summary(res_R_A_WonWT_shrunk)
+
+res_R_A_WonWT_shrunk_sig <- dds_root_A %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_A_WonWT_shrunk_sig, keep.rownames = TRUE)[]
+res_R_A_WonWT_shrunk_sig <- res_R_A_WonWT_shrunk_sig[order(log2FoldChange),]
+
+
+#Effect of treatment on KS4
+res_R_A_WonKS <- results(dds_root_A, list( c("Water_D_vs_ND","WaterD.GenotypeKS4") ))
+res_R_A_WonKS_sig <- subset(res_R_A_WonKS, padj <= 0.1)
+summary(res_R_A_WonKS)
+
+res_R_A_WonKS_shrunk <- dds_root_A %>%
+  lfcShrink(., contrast= list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_R_A_WonKS_shrunk)
+
+res_R_A_WonKS_shrunk_sig <- dds_root_A %>%
+  lfcShrink(.,contrast= list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_A_WonKS_shrunk_sig, keep.rownames = TRUE)[]
+res_R_A_WonKS_shrunk_sig <- res_R_A_WonKS_shrunk_sig[order(log2FoldChange),]
+summary(res_R_A_WonKS_sig)
+
+#What is the difference between mutant and wild-type without treatment?
+res_R_A_MonND = results(dds_root_A, contrast=c("Genotype","KS4","WT"))
+res_R_A_MonND_sig <- subset(res_R_A_MonND, padj <= 0.1)
+summary(res_R_A_MonND)
+
+res_R_A_MonND_shrunk <- dds_root_A %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr")
+summary(res_R_A_MonND_shrunk)
+
+res_R_A_MonND_shrunk_sig <- dds_root_A %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_A_MonND_shrunk_sig, keep.rownames = TRUE)[]
+res_R_A_MonND_shrunk_sig <- res_R_A_MonND_shrunk_sig[order(log2FoldChange),]
+
+#What is the difference between mutant and wild-type WITH treatment?
+res_R_A_MonD = results(dds_root_A, list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4") ))
+res_R_A_MonD <- res_R_A_MonD[order(res_R_A_MonD$padj),] # sort
+head(res_R_A_MonD)
+summary(res_R_A_MonD)
+res_R_A_MonD_sig <- subset(res_R_A_MonD, padj <= 0.1)
+
+res_R_A_MonD_shrunk <- dds_root_A %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_R_A_MonD_shrunk)
+
+res_R_A_MonD_shrunk_sig <- dds_root_A %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj < 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_A_MonD_shrunk_sig, keep.rownames = TRUE)[]
+res_R_A_MonD_shrunk_sig <- res_R_A_MonD_shrunk_sig[order(log2FoldChange),]
+
+#interaction - is effect of treatment different across genotypes?
+res_R_A_int = results(dds_root_A, name="WaterD.GenotypeKS4")
+summary(res_R_A_int)
+res_R_A_int_sig <- subset(res_R_A_int, padj <= 0.1)
+
+res_R_A_int_shrunk <- dds_root_A %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr")
+summary(res_R_A_int_shrunk)
+
+res_R_A_int_shrunk_sig <- dds_root_A %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_A_int_shrunk_sig, keep.rownames = TRUE)[]
+res_R_A_int_shrunk_sig <- res_R_A_int_shrunk_sig[order(log2FoldChange),]
+```
+
+
+Results - ROOT B
+```{r}
+#Effect of treatment on WT
+res_R_B_WonWT <- results(dds_root_B, contrast=c("Water","D","ND"))
+res_R_B_WonWT_sig <- subset(res_R_B_WonWT, padj <= 0.1)
+summary(res_R_B_WonWT)
+
+res_R_B_WonWT_shrunk <- dds_root_B %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr")
+summary(res_R_B_WonWT_shrunk)
+
+res_R_B_WonWT_shrunk_sig <- dds_root_B %>%
+  lfcShrink(.,  contrast=c("Water","D","ND"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_B_WonWT_shrunk_sig, keep.rownames = TRUE)[]
+res_R_B_WonWT_shrunk_sig <- res_R_B_WonWT_shrunk_sig[order(log2FoldChange),]
+
+
+#Effect of treatment on KS4
+res_R_B_WonKS <- results(dds_root_B, list( c("Water_D_vs_ND","WaterD.GenotypeKS4") ))
+res_R_B_WonKS_sig <- subset(res_R_B_WonKS, padj <= 0.1)
+summary(res_R_B_WonKS)
+
+res_R_B_WonKS_shrunk <- dds_root_B %>%
+  lfcShrink(., contrast= list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_R_B_WonKS_shrunk)
+
+res_R_B_WonKS_shrunk_sig <- dds_root_B %>%
+  lfcShrink(., contrast=list( c("Water_D_vs_ND","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_B_WonKS_shrunk_sig, keep.rownames = TRUE)[]
+res_R_B_WonKS_shrunk_sig <- res_R_B_WonKS_shrunk_sig[order(log2FoldChange),]
+summary(res_R_B_WonKS_sig)
+
+#What is the difference between mutant and wild-type without treatment?
+res_R_B_MonND = results(dds_root_B, contrast=c("Genotype","KS4","WT"))
+res_R_B_MonND_sig <- subset(res_R_B_MonND, padj <= 0.1)
+summary(res_R_B_MonND)
+
+res_R_B_MonND_shrunk <- dds_root_B %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr")
+summary(res_R_B_MonND_shrunk)
+
+res_R_B_MonND_shrunk_sig <- dds_root_B %>%
+  lfcShrink(.,  contrast=c("Genotype","KS4","WT"), type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_B_MonND_shrunk_sig, keep.rownames = TRUE)[]
+res_R_B_MonND_shrunk_sig <- res_R_B_MonND_shrunk_sig[order(log2FoldChange),]
+
+#What is the difference between mutant and wild-type WITH treatment?
+res_R_B_MonD = results(dds_root_B, list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4") ))
+res_R_B_MonD <- res_R_B_MonD[order(res_R_B_MonD$padj),] # sort
+head(res_R_B_MonD)
+summary(res_R_B_MonD)
+res_R_B_MonD_sig <- subset(res_R_B_MonD, padj <= 0.1)
+
+res_R_B_MonD_shrunk <- dds_root_B %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr")
+summary(res_R_B_MonD_shrunk)
+
+res_R_B_MonD_shrunk_sig <- dds_root_B %>%
+  lfcShrink(., contrast = list( c("Genotype_KS4_vs_WT","WaterD.GenotypeKS4")), type = "ashr") %>%
+  subset(., padj < 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_B_MonD_shrunk_sig, keep.rownames = TRUE)[]
+res_R_B_MonD_shrunk_sig <- res_R_B_MonD_shrunk_sig[order(log2FoldChange),]
+
+#interaction - is effect of treatment different across genotypes?
+res_R_B_int = results(dds_root_B, name="WaterD.GenotypeKS4")
+summary(res_R_B_int)
+res_R_B_int_sig <- subset(res_R_B_int, padj <= 0.1)
+
+res_R_B_int_shrunk <- dds_root_B %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr")
+summary(res_R_B_int_shrunk)
+
+res_R_B_int_shrunk_sig <- dds_root_B %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr") %>%
+  subset(., padj <= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_B_int_shrunk_sig, keep.rownames = TRUE)[]
+res_R_B_int_shrunk_sig <- res_R_B_int_shrunk_sig[order(log2FoldChange),]
+
+
+
+res_R_B_all <- dds_root_B %>%
+  lfcShrink(.,"WaterD.GenotypeKS4", type = "ashr") %>%
+  #subset(., baseMean >= 0.1)%>%
+  as.data.frame(., rownames = NA) 
+setDT(res_R_B_all, keep.rownames = TRUE)[]
+res_R_B_all <- res_R_B_all[order(log2FoldChange),]
+
+summary(res_R_B_all)
+
+res_R_B_all <- dplyr::select(res_R_B_all, -baseMean, -log2FoldChange, -lfcSE, -pvalue, -padj)
+
+#writexl::write_xlsx(res_R_B_all,"/Users/katiemurphy/Desktop/RNAseq_Aug2020/oct/lists/june21/all_genes.xlsx")
+
+
+```
+Make results lists and combine them
+
+```{r}
+res_all_WonWT <- res_L_A_WonWT_shrunk_sig %>%
+  full_join(res_L_B_WonWT_shrunk_sig, by = "rn") %>%
+  full_join(res_R_A_WonWT_shrunk_sig, by = "rn") %>%
+  full_join(res_R_B_WonWT_shrunk_sig, by = "rn")
+
+res_all_WonKS <- res_L_A_WonKS_shrunk_sig %>%
+  full_join(res_L_B_WonKS_shrunk_sig, by = "rn") %>%
+  full_join(res_R_A_WonKS_shrunk_sig, by = "rn") %>%
+  full_join(res_R_B_WonKS_shrunk_sig, by = "rn")
+
+res_all_MonND <- res_L_A_MonND_shrunk_sig %>%
+  full_join(res_L_B_MonND_shrunk_sig, by = "rn") %>%
+  full_join(res_R_A_MonND_shrunk_sig, by = "rn") %>%
+  full_join(res_R_B_MonND_shrunk_sig, by = "rn")
+
+res_R_all_MonND <- res_R_A_MonND_shrunk_sig %>%
+  full_join(res_R_B_MonND_shrunk_sig, by = "rn")
+
+res_R_all_MonD <- res_R_A_MonD_shrunk_sig %>%
+  full_join(res_R_B_MonD_shrunk_sig, by = "rn")
+
+res_all_MonD <- res_L_A_MonD_shrunk_sig %>%
+  full_join(res_L_B_MonD_shrunk_sig, by = "rn") %>%
+  full_join(res_R_A_MonD_shrunk_sig, by = "rn") %>%
+  full_join(res_R_B_MonD_shrunk_sig, by = "rn")
+
+res_all_int <- res_L_A_int_shrunk_sig %>%
+  full_join(res_L_B_int_shrunk_sig, by = "rn") %>%
+  full_join(res_R_A_int_shrunk_sig, by = "rn") %>%
+  full_join(res_R_B_int_shrunk_sig, by = "rn")
+
+
+
+
+
+```
+
+
+
+Visualize results
+In DESeq2, the function plotMA shows the log2 fold changes attributable to a given variable over the mean of normalized counts for all the samples in the DESeqDataSet. Points will be colored red if the adjusted p value is less than 0.1. Points which fall out of the window are plotted as open triangles pointing either up or down.
+After calling plotMA, one can use the function identify to interactively detect the row number of individual genes by clicking on the plot. One can then recover the gene identifiers by saving the resulting indices:
+```{r}
+#leaf_A
+plotMA(res_L_A_WonWT_shrunk)
+plotMA(res_L_A_WonKS_shrunk)
+plotMA(res_L_A_MonND_shrunk)
+plotMA(res_L_A_MonD_shrunk)
+plotMA(res_L_A_int_shrunk)
+
+
+#leaf_B
+plotMA(res_L_B_WonWT_shrunk)
+plotMA(res_L_B_WonKS_shrunk)
+plotMA(res_L_B_MonND_shrunk)
+plotMA(res_L_B_MonD_shrunk)
+plotMA(res_L_B_int_shrunk)
+
+#root_A
+plotMA(res_R_A_WonWT_shrunk)
+plotMA(res_R_A_WonKS_shrunk)
+plotMA(res_R_A_MonND_shrunk)
+plotMA(res_R_A_MonD_shrunk)
+plotMA(res_R_A_int_shrunk)
+
+#root_B
+plotMA(res_R_B_WonWT_shrunk)
+plotMA(res_R_B_WonKS_shrunk)
+plotMA(res_R_B_MonND_shrunk)
+plotMA(res_R_B_MonD_shrunk)
+plotMA(res_R_B_int_shrunk)
+
+```
+
+Volcano Plots
+
+```{r}
+
+  EnhancedVolcano(res_R_A_WonWT_shrunk,
+    lab = rownames(res_R_A_WonWT_shrunk),
+    x = 'log2FoldChange',
+    y = 'padj',
+    pCutoff = 0.1,
+    xlim = c(-8, 8))
+
+
+  EnhancedVolcano(res_L_B_MonND_shrunk,
+    lab = rownames(res_L_B_MonND_shrunk),
+    x = 'log2FoldChange',
+    y = 'padj',
+    pCutoff = 0.1,
+    xlim = c(-8, 8))
+  
+    EnhancedVolcano(res_R_A_MonND_shrunk,
+    lab = rownames(res_R_A_MonND_shrunk),
+    x = 'log2FoldChange',
+    y = 'padj',
+    pCutoff = 0.1,
+    xlim = c(-8, 8))
+
+    EnhancedVolcano(res_R_A_MonD_shrunk,
+    lab = rownames(res_R_A_MonD_shrunk),
+    x = 'log2FoldChange',
+    y = 'padj',
+    pCutoff = 0.1,
+    xlim = c(-8, 8))
+    
+
+```
+
+Updated 2/3/2022 - plotting the terpenoid genes! 
+```{r}
+key2 <- read.csv(file = 'key_limited.csv', header = TRUE)
+counts_normalized <- counts(dds_root_B, normalized=TRUE)
+
+counts_normalized <- counts_normalized %>%
+  data.frame() %>%
+  rownames_to_column(var="v3_ID") %>% 
+  as_tibble()
+
+normal_terps <- key2 %>%
+  left_join(counts_normalized, by =c ("V4_ID"= "v3_ID") )
+
+normal_terps <- dplyr::select(normal_terps, -V4_ID)
+
+head(normal_terps)
+
+normal_terps2 <- as.data.frame(t(normal_terps))
+
+colnames(normal_terps2) <- normal_terps[,"Name"]
+normal_terps2 <- normal_terps2[-1, ]
+normal_terps2 <- tibble::rownames_to_column(normal_terps2, "SampleID")
+
+head(normal_terps2)
+
+normal_terps3 <- normal_terps2 %>%
+  left_join(samplemap_root_B, by = "SampleID")
+
+head(normal_terps3)
+
+normal_terps4 <- normal_terps3  %>% 
+  gather(gene, counts, -SampleID, -Tissue, -Genotype, -Water, -Timepoint)
+
+normal_terps4 <- transform(normal_terps4, counts = as.numeric(counts))
+
+head(normal_terps4)
+summary(normal_terps4)
+```
+
+
+```{r}
+terps <- ggplot(normal_terps4, aes(x = gene, y = counts, color = Water, shape = Genotype)) +
+  geom_point() +
+  theme_bw() +
+  labs(y = "log10 Normalized Gene Count") +
+  theme(text = element_text(size = 10), axis.ticks.x = element_blank(), legend.key = element_blank()) + 
+  scale_colour_manual(values=c( "#D55E00", "#0072B2")) + 
+  theme(legend.justification=c(1,0), legend.position = "bottom") +
+  scale_y_continuous(trans='log10') +
+  scale_shape_manual(values=c(4,1)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+terps
+```
+
+PlotCounts
+It can also be useful to examine the counts of reads for a single gene across the groups. A simple function for making this plot is plotCounts, which normalizes counts by sequencing depth and adds a pseudocount of 1/2 to allow for log scale plotting. The counts are grouped by the variables in intgroup, where more than one variable can be specified. Here we specify the gene which had the smallest p value from the results table created above. You can select the gene to plot by rowname or by numeric index.
+```{r}
+#something is wrong with this, not showing the right samples
+plotCounts(dds_root_B, gene="Zm00001d000430", intgroup=c ("Genotype", "Water"))
+```
+
+Information about which variables and tests were used can be found by calling the function mcols on the results object.
+```{r}
+mcols(res)$description
+```
+
+Heat map of count matrix
+
+```{r}
+
+#leaf A
+select <- as.data.frame(assay(vsd_leaf_A, normalized = TRUE))
+select$rn <- rownames(select)
+#setDT(select, keep.rownames = TRUE)[]
+
+select_L_A_MonD <- subset(select, select$rn  %in% res_L_A_MonD_shrunk_sig$rn)
+select_L_A_MonD$rn <- NULL
+select_L_A_MonND <- subset(select, select$rn  %in% res_L_A_MonND_shrunk_sig$rn)
+select_L_A_MonND$rn <- NULL
+select_L_A_WonWT <- subset(select, select$rn  %in% res_L_A_WonWT_shrunk_sig$rn)
+select_L_A_WonWT$rn <- NULL
+select_L_A_WonKS <- subset(select, select$rn  %in% res_L_A_WonKS_shrunk_sig$rn)
+select_L_A_WonKS$rn <- NULL
+select_L_A_int <- subset(select, select$rn  %in% res_L_A_int_shrunk_sig$rn)
+select_L_A_int$rn <- NULL
+
+df <- as.data.frame(colData(vsd_leaf_A)[,c("Water","Genotype")])
+pheatmap(select_L_A_MonD, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_A_MonND, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_A_WonWT, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_A_WonKS, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_A_int, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+
+#leaf B
+select <- as.data.frame(assay(vsd_leaf_B, normalized = TRUE))
+select$rn <- rownames(select)
+#setDT(select, keep.rownames = TRUE)[]
+
+select_L_B_MonD <- subset(select, select$rn  %in% res_L_B_MonD_shrunk_sig$rn)
+select_L_B_MonD$rn <- NULL
+select_L_B_MonND <- subset(select, select$rn  %in% res_L_B_MonND_shrunk_sig$rn)
+select_L_B_MonND$rn <- NULL
+select_L_B_WonWT <- subset(select, select$rn  %in% res_L_B_WonWT_shrunk_sig$rn)
+select_L_B_WonWT$rn <- NULL
+select_L_B_WonKS <- subset(select, select$rn  %in% res_L_B_WonKS_shrunk_sig$rn)
+select_L_B_WonKS$rn <- NULL
+select_L_B_int <- subset(select, select$rn  %in% res_L_B_int_shrunk_sig$rn)
+select_L_B_int$rn <- NULL
+
+df <- as.data.frame(colData(vsd_leaf_B)[,c("Water","Genotype")])
+pheatmap(select_L_B_MonD, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_B_MonND, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_B_WonWT, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_B_WonKS, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_L_B_int, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+
+#ROOT A
+select <- as.data.frame(assay(vsd_root_A, normalized = TRUE))
+select$rn <- rownames(select)
+#setDT(select, keep.rownames = TRUE)[]
+
+select_R_A_MonD <- subset(select, select$rn  %in% res_R_A_MonD_shrunk_sig$rn)
+select_R_A_MonD$rn <- NULL
+select_R_A_MonND <- subset(select, select$rn  %in% res_R_A_MonND_shrunk_sig$rn)
+select_R_A_MonND$rn <- NULL
+select_R_A_WonWT <- subset(select, select$rn  %in% res_R_A_WonWT_shrunk_sig$rn)
+select_R_A_WonWT$rn <- NULL
+select_R_A_WonKS <- subset(select, select$rn  %in% res_R_A_WonKS_shrunk_sig$rn)
+select_R_A_WonKS$rn <- NULL
+select_R_A_int <- subset(select, select$rn  %in% res_R_A_int_shrunk_sig$rn)
+select_R_A_int$rn <- NULL
+
+df <- as.data.frame(colData(vsd_root_A)[,c("Water","Genotype")])
+pheatmap(select_R_A_MonD, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_A_MonND, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_A_WonWT, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_A_WonKS, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_A_int, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+
+#ROOT B
+select <- as.data.frame(assay(vsd_root_B, normalized = TRUE))
+select$rn <- rownames(select)
+#setDT(select, keep.rownames = TRUE)[]
+
+select_R_B_MonD <- subset(select, select$rn  %in% res_R_B_MonD_shrunk_sig$rn)
+select_R_B_MonD$rn <- NULL
+select_R_B_MonND <- subset(select, select$rn  %in% res_R_B_MonND_shrunk_sig$rn)
+select_R_B_MonND$rn <- NULL
+select_R_B_WonWT <- subset(select, select$rn  %in% res_R_B_WonWT_shrunk_sig$rn)
+select_R_B_WonWT$rn <- NULL
+select_R_B_WonKS <- subset(select, select$rn  %in% res_R_B_WonKS_shrunk_sig$rn)
+select_R_B_WonKS$rn <- NULL
+select_R_B_int <- subset(select, select$rn  %in% res_R_B_int_shrunk_sig$rn)
+select_R_B_int$rn <- NULL
+
+df <- as.data.frame(colData(vsd_root_B)[,c("Water","Genotype")])
+pheatmap(select_R_B_MonD, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_B_MonND, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_B_WonWT, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_B_WonKS, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(select_R_B_int, cluster_rows=TRUE,
+         cluster_cols=TRUE, annotation_col=df)
+```
+Heat map of sample-to-sample distances
+
+```{r}
+#LEAF A
+sampleDists <- dist(t(assay(vsd_leaf_A)))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd_leaf_A$Water, vsd_leaf_A$Genotype, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+#LEAF B
+sampleDists <- dist(t(assay(vsd_leaf_B)))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd_leaf_B$Water, vsd_leaf_B$Genotype, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+#ROOT A
+sampleDists <- dist(t(assay(vsd_root_A)))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd_root_A$Water, vsd_root_A$Genotype, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+#ROOT B
+sampleDists <- dist(t(assay(vsd_root_B)))
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd_root_B$Water, vsd_root_B$Genotype, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+```
+
+Principal component
+
+```{r}
+
+#leaf A
+plotPCA(vsd_leaf_A, intgroup=c("Water", "Genotype"))
+
+pcaData <- plotPCA(vsd_leaf_A, intgroup=c("Water", "Genotype"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=Water, shape=Genotype)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+
+#leaf B
+plotPCA(vsd_leaf_B, intgroup=c("Water", "Genotype"))
+
+#ROOT A
+plotPCA(vsd_root_A, intgroup=c("Water", "Genotype"))
+
+pcaData <- plotPCA(vsd_root_A, intgroup=c("Water", "Genotype"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=Water, shape=Genotype)) +
+  geom_point(size=3) +
+  geom_text(aes(label= name)) + 
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  expand_limits(x=c(0,40), y=c(0, 50)) +
+  coord_fixed()
+
+#ROOT B
+plotPCA(vsd_root_B, intgroup=c("Water", "Genotype"))
+```
+
+
+Venn Diagrams
+```{r}
+
+venn.diagram(
+  x = list(res_R_B_MonD_shrunk_sig$rn, res_R_A_MonD_shrunk_sig$rn, res_L_A_MonD_shrunk_sig$rn, res_L_B_MonD_shrunk_sig$rn),
+  category.names = c("Root_B" , "Root_A", "Leaf_A", "Leaf_B"),
+  filename = 'MonD.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_R_B_MonD_shrunk_sig$rn, res_R_A_MonD_shrunk_sig$rn, res_R_B_MonND_shrunk_sig$rn, res_R_A_MonND_shrunk_sig$rn),
+  category.names = c("Root_B_D" , "Root_A_D", "Root_B_ND", "Root_A_ND"),
+  filename = 'MonRoot.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_L_B_MonD_shrunk_sig$rn, res_L_A_MonD_shrunk_sig$rn, res_L_B_MonND_shrunk_sig$rn, res_L_A_MonND_shrunk_sig$rn),
+  category.names = c("Leaf_B_D" , "Leaf_A_D", "Leaf_B_ND", "Leaf_A_ND"),
+  filename = 'MonLeaf.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_R_B_MonND_shrunk_sig$rn, res_R_A_MonND_shrunk_sig$rn, res_L_A_MonND_shrunk_sig$rn, res_L_B_MonND_shrunk_sig$rn),
+  category.names = c("Root_B" , "Root_A", "Leaf_A", "Leaf_B"),
+  filename = 'MonND.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_R_B_WonWT_shrunk_sig$rn, res_R_A_WonWT_shrunk_sig$rn, res_L_A_WonWT_shrunk_sig$rn, res_L_B_WonWT_shrunk_sig$rn),
+  category.names = c("Root_B" , "Root_A", "Leaf_A", "Leaf_B"),
+  filename = 'WonWT.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_R_B_WonKS_shrunk_sig$rn, res_R_A_WonKS_shrunk_sig$rn, res_L_A_WonKS_shrunk_sig$rn, res_L_B_WonKS_shrunk_sig$rn),
+  category.names = c("Root_B" , "Root_A", "Leaf_A", "Leaf_B"),
+  filename = 'WonKS.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_R_B_int_shrunk_sig$rn, res_R_A_int_shrunk_sig$rn, res_L_A_int_shrunk_sig$rn, res_L_B_int_shrunk_sig$rn),
+  category.names = c("Root_B" , "Root_A", "Leaf_A", "Leaf_B"),
+  filename = 'int.png',
+  output=TRUE)
+
+
+venn.diagram(
+  x = list(res_R_B_WonWT_shrunk_sig$rn, res_R_A_WonWT_shrunk_sig$rn, res_R_B_WonKS_shrunk_sig$rn, res_R_A_WonKS_shrunk_sig$rn),
+  category.names = c("Root_B_WT" , "Root_A_WT", "Root_B_KS", "Root_A_WT"),
+  filename = 'WTvsKS root water effects.png',
+  output=TRUE)
+
+venn.diagram(
+  x = list(res_L_B_WonWT_shrunk_sig$rn, res_L_A_WonWT_shrunk_sig$rn, res_L_B_WonKS_shrunk_sig$rn, res_L_A_WonKS_shrunk_sig$rn),
+  category.names = c("Leaf_B_WT" , "Leaf_A_WT", "Leaf_B_KS", "Leaf_A_WT"),
+  filename = 'WTvsKS leaf water effects.png',
+  output=TRUE)
+
+
+```
+Align V4 to V3 and classical names, and export
+
+```{r}
+
+library(writexl)
+library(readxl)
+
+#leaf A
+res_L_A_WonWT_export <- res_L_A_WonWT_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_A_WonWT_export, "/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_A_WonWT.xlsx")
+
+res_L_A_WonKS_export <- res_L_A_WonKS_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_A_WonKS_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_A_WonKS.xlsx")
+
+res_L_A_MonND_export <- res_L_A_MonND_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_A_MonND_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_A_MonND.xlsx")
+
+res_L_A_MonD_export <- res_L_A_MonD_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_A_MonD_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_A_MonD.xlsx")
+
+res_L_A_int_export <- res_L_A_int_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_A_int_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_A_int.xlsx")
+
+#leaf B
+res_L_B_WonWT_export <- res_L_B_WonWT_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_B_WonWT_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_B_WonWT.xlsx")
+
+res_L_B_WonKS_export <- res_L_B_WonKS_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_B_WonKS_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_B_WonKS.xlsx")
+
+res_L_B_MonND_export <- res_L_B_MonND_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_B_MonND_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_B_MonND.xlsx")
+
+res_L_B_MonD_export <- res_L_B_MonD_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_B_MonD_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_B_MonD.xlsx")
+
+res_L_B_int_export <- res_L_B_int_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_B_int_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_B_int.xlsx")
+
+#root A
+res_R_A_WonWT_export <- res_R_A_WonWT_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_A_WonWT_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_A_WonWT.xlsx")
+
+res_R_A_WonKS_export <- res_R_A_WonKS_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_A_WonKS_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_A_WonKS.xlsx")
+
+res_R_A_MonND_export <- res_R_A_MonND_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_A_MonND_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_A_MonND.xlsx")
+
+res_R_A_MonD_export <- res_R_A_MonD_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_A_MonD_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_A_MonD.xlsx")
+
+res_R_A_int_export <- res_R_A_int_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_A_int_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_A_int.xlsx")
+
+#root B
+res_R_B_WonWT_export <- res_R_B_WonWT_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_B_WonWT_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_B_WonWT.xlsx")
+
+res_R_B_WonKS_export <- res_R_B_WonKS_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_B_WonKS_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_B_WonKS.xlsx")
+
+res_R_B_MonND_export <- res_R_B_MonND_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_B_MonND_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_B_MonND.xlsx")
+
+res_R_B_MonD_export <- res_R_B_MonD_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_B_MonD_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_B_MonD.xlsx")
+
+res_R_B_int_export <- res_R_B_int_shrunk_sig %>%
+  left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_B_int_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_B_int.xlsx")
+
+
+```
+
+
+```{r}
+res_int_export <- res_L_A_int_shrunk_sig %>%
+  inner_join(res_L_B_int_shrunk_sig, by = "rn") %>%
+    left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_int_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_int_common.xlsx")
+
+res_R_all_export <- res_R_A_MonD_shrunk_sig %>%
+  inner_join(res_R_B_MonD_shrunk_sig, by = "rn") %>%
+    inner_join(res_R_B_MonND_shrunk_sig, by = "rn") %>%
+    inner_join(res_R_A_MonND_shrunk_sig, by = "rn") %>%
+    left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_R_all_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/R_Mon_common.xlsx")
+
+res_L_all_export <- res_L_A_MonD_shrunk_sig %>%
+  inner_join(res_L_B_MonD_shrunk_sig, by = "rn") %>%
+    inner_join(res_L_B_MonND_shrunk_sig, by = "rn") %>%
+    inner_join(res_L_A_MonND_shrunk_sig, by = "rn") %>%
+    left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_L_all_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/L_Mon_common.xlsx")
+
+res_MonD_all_export <- res_L_A_MonD_shrunk_sig %>%
+  inner_join(res_L_B_MonD_shrunk_sig, by = "rn") %>%
+    inner_join(res_R_B_MonD_shrunk_sig, by = "rn") %>%
+    inner_join(res_R_A_MonD_shrunk_sig, by = "rn") %>%
+    left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_MonD_all_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/LR_MonD_common.xlsx")
+
+res_MonND_all_export <- res_L_A_MonND_shrunk_sig %>%
+  inner_join(res_L_B_MonND_shrunk_sig, by = "rn") %>%
+    inner_join(res_R_B_MonND_shrunk_sig, by = "rn") %>%
+    inner_join(res_R_A_MonND_shrunk_sig, by = "rn") %>%
+    left_join(v3_match, by = c("rn" = "V4_ID"))
+write_xlsx(res_MonND_all_export,"/Users/zerbe/Desktop/RNAseq_Aug2020/oct/lists/LR_MonND_common.xlsx")
+
+```
+
